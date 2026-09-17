@@ -17,7 +17,7 @@ public Plugin myinfo = {
     author = "catmint",
     description = "Download a map and change to it",
     version = "0.1",
-    url = "https://github.com/misscatmint/sm-map-downloader/"
+    url = "https://github.com/misscatmint/sm-dlmap/"
 };
 
 ConVar g_cvUrl = null;
