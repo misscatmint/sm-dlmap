@@ -23,6 +23,7 @@ public Plugin myinfo = {
 ConVar g_cvUrl = null;
 ConVar g_cvSubdirs = null;
 ConVar g_cvMaplistUrl = null;
+ConVar g_cvWrapMapCmd = null;
 
 public void OnPluginStart() {
     LoadTranslations("common.phrases");
@@ -32,6 +33,8 @@ public void OnPluginStart() {
         "extra subdirectories to check when downloading (space separated)");
     g_cvMaplistUrl = CreateConVar("sm_dlmap_maplist_url", "",
         "optional maplist.txt url (for fuzzy matching)");
+    g_cvMaplistUrl = CreateConVar("sm_dlmap_wrap_map_cmd", "1",
+        "make sm_map also download missing maps");
 
     RegAdminCmd("sm_dlmap", Command_DownloadMap, ADMFLAG_CHANGEMAP,
                 "sm_dlmap <map> - download and change to map");
@@ -44,92 +47,8 @@ public void OnPluginEnd() {
     RemoveCommandListener(OnMapCommand, "sm_map");
 }
 
-static bool IsSafeName(const char[] str) {
-    if (str[0] == '\0') {
-        return false;
-    }
-    for (int i = 0; str[i] != '\0'; ++i) {
-        if (!IsCharAlpha(str[i]) && !IsCharNumeric(str[i]) && str[i] != '_') {
-            return false;
-        }
-    }
-    return true;
-}
-
-static void BuildMapNames(const char[] map, const char[] subdirs,
-                          ArrayList maps) {
-    maps.PushString(map);
-
-    if (subdirs[0] != '\0') {
-        char buffers[MAX_MAP_SUBDIRS][MAX_MAP_SUBDIR];
-        int count = ExplodeString(subdirs, " ", buffers, sizeof(buffers),
-                                  sizeof(buffers[]));
-        for (int i = 0; i < count; ++i) {
-            if (!IsSafeName(buffers[i])) {
-                LogError("Bad map subdir \"%s\" (skipping)", buffers[i]);
-                continue;
-            }
-            char subdirMap[MAX_MAP_NAME];
-            Format(subdirMap, sizeof(subdirMap), "%s/%s", buffers[i], map);
-            maps.PushString(subdirMap);
-        }
-    }
-}
-
-static void BuildDownloadUrls(const char[] baseUrl, ArrayList maps,
-                              ArrayList mapUrls) {
-    for (int i = 0; i < maps.Length; ++i) {
-        char map[MAX_MAP_NAME];
-        maps.GetString(i, map, sizeof(map));
-        char mapUrl[MAX_MAP_URL];
-        Format(mapUrl, sizeof(mapUrl), "%s/%s.bsp", baseUrl, map);
-        mapUrls.PushString(mapUrl);
-    }
-}
-
-static void CleanupTempFile(const char[] tempPath) {
-    if (FileExists(tempPath) && !DeleteFile(tempPath)) {
-        LogError("Failed to delete map download temp file %s", tempPath);
-    }
-}
-
-static void BuildTempPath(const char[] name, const char[] ext,
-                          char[] tempPath, int size) {
-    BuildPath(Path_SM, tempPath, size, "../../maps/tmp_%s_%d.%s", name,
-              GetURandomInt(), ext);
-}
-
-static void BuildDestPath(const char[] map, char[] destDir, int destDirSize,
-                          char[] destPath, int destPathSize) {
-    int lastSlashIdx = FindCharInString(map, '/', true);
-    if (lastSlashIdx != -1) {
-        BuildPath(Path_SM, destDir, destDirSize, "../../maps/%s",
-                  map[lastSlashIdx + 1]);
-    } else {
-        BuildPath(Path_SM, destDir, destDirSize, "../../maps");
-    }
-    BuildPath(Path_SM, destPath, destPathSize, "../../maps/%s.bsp", map);
-}
-
-static bool QueueDownload(
-    const char[] url, SteamWorksHTTPRequestCompleted completedCallback,
-    DataPack pack) {
-    Handle request = SteamWorks_CreateHTTPRequest(k_EHTTPMethodGET, url);
-    SteamWorks_SetHTTPRequestNetworkActivityTimeout(request, HTTP_TIMEOUT);
-    SteamWorks_SetHTTPRequestAbsoluteTimeoutMS(request,
-                                               HTTP_TIMELIMIT * 1000);
-    SteamWorks_SetHTTPRequestContextValue(request, pack);
-    SteamWorks_SetHTTPCallbacks(request, completedCallback);
-    if (!SteamWorks_SendHTTPRequest(request)) {
-        LogMessage("Failed to initialize map download HTTP request");
-        delete request;
-        return false;
-    }
-    return true;
-}
-
 public Action OnMapCommand(int client, const char[] command, int argc) {
-    if (argc < 1) {
+    if (!g_cvWrapMapCmd.BoolValue || argc < 1) {
         return Plugin_Continue;
     }
     return Command_DownloadMap_Internal(client, argc, true);
@@ -187,6 +106,23 @@ static Action Command_DownloadMap_Internal(int client, int args,
     }
 
     return Plugin_Handled;
+}
+
+static bool QueueDownload(
+    const char[] url, SteamWorksHTTPRequestCompleted completedCallback,
+    DataPack pack) {
+    Handle request = SteamWorks_CreateHTTPRequest(k_EHTTPMethodGET, url);
+    SteamWorks_SetHTTPRequestNetworkActivityTimeout(request, HTTP_TIMEOUT);
+    SteamWorks_SetHTTPRequestAbsoluteTimeoutMS(request,
+                                               HTTP_TIMELIMIT * 1000);
+    SteamWorks_SetHTTPRequestContextValue(request, pack);
+    SteamWorks_SetHTTPCallbacks(request, completedCallback);
+    if (!SteamWorks_SendHTTPRequest(request)) {
+        LogMessage("Failed to initialize map download HTTP request");
+        delete request;
+        return false;
+    }
+    return true;
 }
 
 static void FindMapDownload(int client, const char[] input,
@@ -438,4 +374,71 @@ static Action Timer_ChangeMap(Handle timer, DataPack pack) {
     pack.ReadString(map, sizeof(map));
     ForceChangeLevel(map, "sm_dlmap Command");
     return Plugin_Stop;
+}
+
+static bool IsSafeName(const char[] str) {
+    if (str[0] == '\0') {
+        return false;
+    }
+    for (int i = 0; str[i] != '\0'; ++i) {
+        if (!IsCharAlpha(str[i]) && !IsCharNumeric(str[i]) && str[i] != '_') {
+            return false;
+        }
+    }
+    return true;
+}
+
+static void BuildMapNames(const char[] map, const char[] subdirs,
+                          ArrayList maps) {
+    maps.PushString(map);
+
+    if (subdirs[0] != '\0') {
+        char buffers[MAX_MAP_SUBDIRS][MAX_MAP_SUBDIR];
+        int count = ExplodeString(subdirs, " ", buffers, sizeof(buffers),
+                                  sizeof(buffers[]));
+        for (int i = 0; i < count; ++i) {
+            if (!IsSafeName(buffers[i])) {
+                LogError("Bad map subdir \"%s\" (skipping)", buffers[i]);
+                continue;
+            }
+            char subdirMap[MAX_MAP_NAME];
+            Format(subdirMap, sizeof(subdirMap), "%s/%s", buffers[i], map);
+            maps.PushString(subdirMap);
+        }
+    }
+}
+
+static void BuildDownloadUrls(const char[] baseUrl, ArrayList maps,
+                              ArrayList mapUrls) {
+    for (int i = 0; i < maps.Length; ++i) {
+        char map[MAX_MAP_NAME];
+        maps.GetString(i, map, sizeof(map));
+        char mapUrl[MAX_MAP_URL];
+        Format(mapUrl, sizeof(mapUrl), "%s/%s.bsp", baseUrl, map);
+        mapUrls.PushString(mapUrl);
+    }
+}
+
+static void BuildTempPath(const char[] name, const char[] ext,
+                          char[] tempPath, int size) {
+    BuildPath(Path_SM, tempPath, size, "../../maps/tmp_%s_%d.%s", name,
+              GetURandomInt(), ext);
+}
+
+static void CleanupTempFile(const char[] tempPath) {
+    if (FileExists(tempPath) && !DeleteFile(tempPath)) {
+        LogError("Failed to delete map download temp file %s", tempPath);
+    }
+}
+
+static void BuildDestPath(const char[] map, char[] destDir, int destDirSize,
+                          char[] destPath, int destPathSize) {
+    int lastSlashIdx = FindCharInString(map, '/', true);
+    if (lastSlashIdx != -1) {
+        BuildPath(Path_SM, destDir, destDirSize, "../../maps/%s",
+                  map[lastSlashIdx + 1]);
+    } else {
+        BuildPath(Path_SM, destDir, destDirSize, "../../maps");
+    }
+    BuildPath(Path_SM, destPath, destPathSize, "../../maps/%s.bsp", map);
 }
