@@ -33,7 +33,7 @@ public void OnPluginStart() {
         "extra subdirectories to check when downloading (space separated)");
     g_cvMaplistUrl = CreateConVar("sm_dlmap_maplist_url", "",
         "optional maplist.txt url (for fuzzy matching)");
-    g_cvMaplistUrl = CreateConVar("sm_dlmap_wrap_map_cmd", "1",
+    g_cvWrapMapCmd = CreateConVar("sm_dlmap_wrap_map_cmd", "1",
         "make sm_map also download missing maps");
 
     RegAdminCmd("sm_dlmap", Command_DownloadMap, ADMFLAG_ROOT,
