@@ -36,7 +36,7 @@ public void OnPluginStart() {
     g_cvMaplistUrl = CreateConVar("sm_dlmap_wrap_map_cmd", "1",
         "make sm_map also download missing maps");
 
-    RegAdminCmd("sm_dlmap", Command_DownloadMap, ADMFLAG_CHANGEMAP,
+    RegAdminCmd("sm_dlmap", Command_DownloadMap, ADMFLAG_ROOT,
                 "sm_dlmap <map> - download and change to map");
     AddCommandListener(OnMapCommand, "sm_map");
 
