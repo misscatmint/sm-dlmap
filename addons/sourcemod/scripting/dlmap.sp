@@ -22,6 +22,7 @@ public Plugin myinfo = {
 
 ConVar g_cvUrl = null;
 ConVar g_cvSubdirs = null;
+ConVar g_cvMaplistUrl = null;
 
 public void OnPluginStart() {
     LoadTranslations("common.phrases");
@@ -29,11 +30,18 @@ public void OnPluginStart() {
     g_cvUrl = CreateConVar("sm_dlmap_url", "", "map download url");
     g_cvSubdirs = CreateConVar("sm_dlmap_subdirs", "",
         "extra subdirectories to check when downloading (space separated)");
+    g_cvMaplistUrl = CreateConVar("sm_dlmap_maplist_url", "",
+        "optional maplist.txt url (for fuzzy matching)");
 
     RegAdminCmd("sm_dlmap", Command_DownloadMap, ADMFLAG_CHANGEMAP,
                 "sm_dlmap <map> - download and change to map");
+    AddCommandListener(OnMapCommand, "sm_map");
 
     AutoExecConfig(true, "dlmap");
+}
+
+public void OnPluginEnd() {
+    RemoveCommandListener(OnMapCommand, "sm_map");
 }
 
 static bool IsSafeName(const char[] str) {
@@ -85,9 +93,10 @@ static void CleanupTempFile(const char[] tempPath) {
     }
 }
 
-static void BuildTempPath(const char[] map, char[] tempPath, int size) {
-    BuildPath(Path_SM, tempPath, size, "../../maps/tmp_%s_%d.bsp", map,
-              GetURandomInt());
+static void BuildTempPath(const char[] name, const char[] ext,
+                          char[] tempPath, int size) {
+    BuildPath(Path_SM, tempPath, size, "../../maps/tmp_%s_%d.%s", name,
+              GetURandomInt(), ext);
 }
 
 static void BuildDestPath(const char[] map, char[] destDir, int destDirSize,
@@ -102,15 +111,15 @@ static void BuildDestPath(const char[] map, char[] destDir, int destDirSize,
     BuildPath(Path_SM, destPath, destPathSize, "../../maps/%s.bsp", map);
 }
 
-static bool QueueMapDownload(const char[] mapUrl, any context) {
-    LogMessage("Downloading map from %s", mapUrl);
-
-    Handle request = SteamWorks_CreateHTTPRequest(k_EHTTPMethodGET, mapUrl);
+static bool QueueDownload(
+    const char[] url, SteamWorksHTTPRequestCompleted completedCallback,
+    DataPack pack) {
+    Handle request = SteamWorks_CreateHTTPRequest(k_EHTTPMethodGET, url);
     SteamWorks_SetHTTPRequestNetworkActivityTimeout(request, HTTP_TIMEOUT);
     SteamWorks_SetHTTPRequestAbsoluteTimeoutMS(request,
                                                HTTP_TIMELIMIT * 1000);
-    SteamWorks_SetHTTPRequestContextValue(request, context);
-    SteamWorks_SetHTTPCallbacks(request, OnMapDownloaded);
+    SteamWorks_SetHTTPRequestContextValue(request, pack);
+    SteamWorks_SetHTTPCallbacks(request, completedCallback);
     if (!SteamWorks_SendHTTPRequest(request)) {
         LogMessage("Failed to initialize map download HTTP request");
         delete request;
@@ -119,7 +128,19 @@ static bool QueueMapDownload(const char[] mapUrl, any context) {
     return true;
 }
 
+public Action OnMapCommand(int client, const char[] command, int argc) {
+    if (argc < 1) {
+        return Plugin_Continue;
+    }
+    return Command_DownloadMap_Internal(client, argc, true);
+}
+
 public Action Command_DownloadMap(int client, int args) {
+    return Command_DownloadMap_Internal(client, args, false);
+}
+
+static Action Command_DownloadMap_Internal(int client, int args,
+                                           bool inMapWrapper) {
     if (args < 1) {
         ReplyToCommand(client, "[SM] Usage: sm_dlmap <map>");
         return Plugin_Handled;
@@ -131,7 +152,11 @@ public Action Command_DownloadMap(int client, int args) {
 
     if (FindMap(input, displayName, sizeof(displayName)) !=
         FindMap_NotFound) {
-        ChangeMap(client, displayName);
+        if (inMapWrapper) {
+            return Plugin_Continue;
+        }
+
+        ReplyToCommand(client, "[SM] Map already downloaded");
         return Plugin_Handled;
     }
 
@@ -152,6 +177,96 @@ public Action Command_DownloadMap(int client, int args) {
         return Plugin_Handled;
     }
 
+    char maplistUrl[MAX_MAP_URL];
+    g_cvMaplistUrl.GetString(maplistUrl, sizeof(maplistUrl));
+    if (maplistUrl[0] == '\0') {
+        StartMapDownload(client, input, baseUrl, inMapWrapper);
+    } else {
+        ShowActivity2(client, "[SM] ", "Finding map %s...", input);
+        FindMapDownload(client, input, baseUrl, maplistUrl, inMapWrapper);
+    }
+
+    return Plugin_Handled;
+}
+
+static void FindMapDownload(int client, const char[] input,
+                            const char[] baseUrl, const char[] maplistUrl,
+                            bool changeMap) {
+    DataPack pack = new DataPack();
+    pack.WriteCell(GetClientUserId(client));
+    pack.WriteCell(GetCmdReplySource());
+    pack.WriteString(input);
+    pack.WriteString(baseUrl);
+    pack.WriteString(maplistUrl);
+    pack.WriteCell(changeMap);
+
+    LogMessage("Downloading map list from %s", maplistUrl);
+    if (!QueueDownload(maplistUrl, OnMaplistDownloaded, pack)) {
+        LogError("Map list download failed");
+        StartMapDownload(client, input, baseUrl, changeMap);
+        delete pack;
+    }
+}
+
+static void OnMaplistDownloaded(Handle request, bool failure,
+                                bool requestSuccessful,
+                                EHTTPStatusCode statusCode, DataPack pack) {
+    pack.Reset();
+    int client = GetClientOfUserId(pack.ReadCell());
+    SetCmdReplySource(view_as<ReplySource>(pack.ReadCell()));
+    char input[MAX_MAP_NAME];
+    pack.ReadString(input, sizeof(input));
+    char baseUrl[MAX_MAP_URL];
+    pack.ReadString(baseUrl, sizeof(baseUrl));
+    char maplistUrl[MAX_MAP_URL];
+    pack.ReadString(maplistUrl, sizeof(maplistUrl));
+    bool changeMap = pack.ReadCell();
+    delete pack;
+
+    if (failure || !requestSuccessful ||
+        statusCode != k_EHTTPStatusCode200OK) {
+        LogError("Failed to download map list from %s (HTTP %d)", maplistUrl,
+                 statusCode);
+        StartMapDownload(client, input, baseUrl, changeMap);
+        return;
+    }
+
+    char tempPath[PLATFORM_MAX_PATH];
+    BuildTempPath("maplist", "txt", tempPath, sizeof(tempPath));
+    bool success = SteamWorks_WriteHTTPResponseBodyToFile(request, tempPath);
+    delete request;
+    if (!success) {
+        LogError("Failed to initialize map download HTTP response file at %s",
+                 tempPath);
+        StartMapDownload(client, input, baseUrl, changeMap);
+        return;
+    }
+
+    File file = OpenFile(tempPath, "r");
+    if (!file) {
+        CleanupTempFile(tempPath);
+        StartMapDownload(client, input, baseUrl, changeMap);
+        return;
+    }
+
+    char maplistName[MAX_MAP_NAME];
+    while (file.ReadLine(maplistName, sizeof(maplistName))) {
+        TrimString(maplistName);
+        if (StrContains(maplistName, input, false) != -1) {
+            delete file;
+            CleanupTempFile(tempPath);
+            StartMapDownload(client, maplistName, baseUrl, changeMap);
+            return;
+        }
+    }
+
+    delete file;
+    CleanupTempFile(tempPath);
+    StartMapDownload(client, input, baseUrl, changeMap);
+}
+
+static void StartMapDownload(int client, const char[] input,
+                             const char[] baseUrl, bool changeMap) {
     char subdirs[MAX_MAP_URL];
     g_cvSubdirs.GetString(subdirs, sizeof(subdirs));
     ArrayList maps = new ArrayList(ByteCountToCells(MAX_MAP_NAME));
@@ -162,7 +277,7 @@ public Action Command_DownloadMap(int client, int args) {
         ReplyToCommand(client, "[SM] Map download URL not set");
         delete maps;
         delete mapUrls;
-        return Plugin_Handled;
+        return;
     }
 
     int mapIdx = 0;
@@ -171,7 +286,7 @@ public Action Command_DownloadMap(int client, int args) {
     char mapUrl[MAX_MAP_URL];
     mapUrls.GetString(mapIdx, mapUrl, sizeof(mapUrl));
     char tempPath[PLATFORM_MAX_PATH];
-    BuildTempPath(map, tempPath, sizeof(tempPath));
+    BuildTempPath(map, "bsp", tempPath, sizeof(tempPath));
 
     DataPack pack = new DataPack();
     pack.WriteCell(GetClientUserId(client));
@@ -180,17 +295,17 @@ public Action Command_DownloadMap(int client, int args) {
     pack.WriteCell(mapUrls);
     pack.WriteCell(mapIdx);
     pack.WriteString(tempPath);
+    pack.WriteCell(changeMap);
 
-    if (!QueueMapDownload(mapUrl, pack)) {
+    ShowActivity2(client, "[SM] ", "Downloading map %s...", input);
+    LogMessage("Downloading map from %s", mapUrl);
+    if (!QueueDownload(mapUrl, OnMapDownloaded, pack)) {
         ReplyToCommand(client, "[SM] Map download failed");
         CleanupTempFile(tempPath);
         delete maps;
         delete mapUrls;
         delete pack;
-        return Plugin_Handled;
     }
-
-    return Plugin_Handled;
 }
 
 static void OnMapDownloaded(Handle request, bool failure,
@@ -205,6 +320,7 @@ static void OnMapDownloaded(Handle request, bool failure,
     int mapIdx = pack.ReadCell();
     char tempPath[PLATFORM_MAX_PATH];
     pack.ReadString(tempPath, sizeof(tempPath));
+    bool changeMap = pack.ReadCell();
 
     char map[MAX_MAP_NAME];
     maps.GetString(mapIdx, map, sizeof(map));
@@ -234,9 +350,11 @@ static void OnMapDownloaded(Handle request, bool failure,
             newPack.WriteCell(mapUrls);
             newPack.WriteCell(mapIdx);
             newPack.WriteString(tempPath);
+            newPack.WriteCell(changeMap);
 
             mapUrls.GetString(mapIdx, mapUrl, sizeof(mapUrl));
-            if (!QueueMapDownload(mapUrl, newPack)) {
+            LogMessage("Downloading map from %s", mapUrl);
+            if (!QueueDownload(mapUrl, OnMapDownloaded, newPack)) {
                 ReplyToCommand(client, "[SM] Map download failed");
                 CleanupTempFile(tempPath);
                 delete maps;
@@ -268,8 +386,6 @@ static void OnMapDownloaded(Handle request, bool failure,
         return;
     }
 
-    LogMessage("Map downloaded to %s", tempPath);
-
     char destDir[PLATFORM_MAX_PATH];
     char destPath[PLATFORM_MAX_PATH];
     BuildDestPath(map, destDir, sizeof(destDir), destPath,
@@ -286,17 +402,20 @@ static void OnMapDownloaded(Handle request, bool failure,
     if (!RenameFile(destPath, tempPath)) {
         LogError("Failed to rename map to %s", destPath);
         ReplyToCommand(client, "[SM] Map download failed");
+        CleanupTempFile(tempPath);
         delete request;
         return;
-    } else {
-        LogMessage("Map download renamed to %s", destPath);
     }
 
     LogAction(client, -1, "\"%L\" downloaded map \"%s\"",
               client, mapUrl);
 
     int lastSlashIdx = FindCharInString(map, '/', true);
-    ChangeMap(client, map[lastSlashIdx + 1]);
+    if (changeMap) {
+        ChangeMap(client, map[lastSlashIdx + 1]);
+    } else {
+        ShowActivity2(client, "[SM] ", "Downloaded map %s", map[lastSlashIdx + 1]);
+    }
     delete request;
 }
 
