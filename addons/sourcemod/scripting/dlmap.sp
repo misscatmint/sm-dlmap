@@ -101,7 +101,6 @@ static Action Command_DownloadMap_Internal(int client, int args,
     if (maplistUrl[0] == '\0') {
         StartMapDownload(client, input, baseUrl, inMapWrapper);
     } else {
-        ShowActivity2(client, "[SM] ", "Finding map %s...", input);
         FindMapDownload(client, input, baseUrl, maplistUrl, inMapWrapper);
     }
 
@@ -129,7 +128,7 @@ static void FindMapDownload(int client, const char[] input,
                             const char[] baseUrl, const char[] maplistUrl,
                             bool changeMap) {
     DataPack pack = new DataPack();
-    pack.WriteCell(GetClientUserId(client));
+    pack.WriteCell(GetClientUserIdOrConsole(client));
     pack.WriteCell(GetCmdReplySource());
     pack.WriteString(input);
     pack.WriteString(baseUrl);
@@ -148,7 +147,7 @@ static void OnMaplistDownloaded(Handle request, bool failure,
                                 bool requestSuccessful,
                                 EHTTPStatusCode statusCode, DataPack pack) {
     pack.Reset();
-    int client = GetClientOfUserId(pack.ReadCell());
+    int client = GetClientOfUserIdOrConsole(pack.ReadCell());
     SetCmdReplySource(view_as<ReplySource>(pack.ReadCell()));
     char input[MAX_MAP_NAME];
     pack.ReadString(input, sizeof(input));
@@ -225,7 +224,7 @@ static void StartMapDownload(int client, const char[] input,
     BuildTempPath(map, "bsp", tempPath, sizeof(tempPath));
 
     DataPack pack = new DataPack();
-    pack.WriteCell(GetClientUserId(client));
+    pack.WriteCell(GetClientUserIdOrConsole(client));
     pack.WriteCell(GetCmdReplySource());
     pack.WriteCell(maps);
     pack.WriteCell(mapUrls);
@@ -249,7 +248,7 @@ static void OnMapDownloaded(Handle request, bool failure,
                             EHTTPStatusCode statusCode, DataPack pack) {
     pack.Reset();
 
-    int client = GetClientOfUserId(pack.ReadCell());
+    int client = GetClientOfUserIdOrConsole(pack.ReadCell());
     SetCmdReplySource(view_as<ReplySource>(pack.ReadCell()));
     ArrayList maps = view_as<ArrayList>(pack.ReadCell());
     ArrayList mapUrls = view_as<ArrayList>(pack.ReadCell());
@@ -280,7 +279,7 @@ static void OnMapDownloaded(Handle request, bool failure,
         mapIdx += 1;
         if (mapIdx < maps.Length) {
             DataPack newPack = new DataPack();
-            newPack.WriteCell(GetClientUserId(client));
+            newPack.WriteCell(GetClientUserIdOrConsole(client));
             newPack.WriteCell(GetCmdReplySource());
             newPack.WriteCell(maps);
             newPack.WriteCell(mapUrls);
@@ -374,6 +373,20 @@ static Action Timer_ChangeMap(Handle timer, DataPack pack) {
     pack.ReadString(map, sizeof(map));
     ForceChangeLevel(map, "sm_dlmap Command");
     return Plugin_Stop;
+}
+
+int GetClientUserIdOrConsole(int client) {
+    if (client == 0) {
+        return client;
+    }
+    return GetClientUserId(client);
+}
+
+int GetClientOfUserIdOrConsole(int userid) {
+    if (userid == 0) {
+        return userid;
+    }
+    return GetClientOfUserId(userid);
 }
 
 static bool IsSafeName(const char[] str) {
