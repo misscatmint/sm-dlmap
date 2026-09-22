@@ -117,7 +117,7 @@ static bool QueueDownload(
     SteamWorks_SetHTTPRequestContextValue(request, pack);
     SteamWorks_SetHTTPCallbacks(request, completedCallback);
     if (!SteamWorks_SendHTTPRequest(request)) {
-        LogMessage("Failed to initialize map download HTTP request");
+        LogError("Failed to initialize map download HTTP request");
         delete request;
         return false;
     }
@@ -135,7 +135,7 @@ static void FindMapDownload(int client, const char[] input,
     pack.WriteString(maplistUrl);
     pack.WriteCell(changeMap);
 
-    LogMessage("Downloading map list from %s", maplistUrl);
+    LogMessage("Downloading map list from \"%s\"", maplistUrl);
     if (!QueueDownload(maplistUrl, OnMaplistDownloaded, pack)) {
         LogError("Map list download failed");
         StartMapDownload(client, input, baseUrl, changeMap);
@@ -160,8 +160,8 @@ static void OnMaplistDownloaded(Handle request, bool failure,
 
     if (failure || !requestSuccessful ||
         statusCode != k_EHTTPStatusCode200OK) {
-        LogError("Failed to download map list from %s (HTTP %d)", maplistUrl,
-                 statusCode);
+        LogError("Failed to download map list from \"%s\" (HTTP %d)",
+                 maplistUrl, statusCode);
         StartMapDownload(client, input, baseUrl, changeMap);
         return;
     }
@@ -171,7 +171,7 @@ static void OnMaplistDownloaded(Handle request, bool failure,
     bool success = SteamWorks_WriteHTTPResponseBodyToFile(request, tempPath);
     delete request;
     if (!success) {
-        LogError("Failed to initialize map download HTTP response file at %s",
+        LogError("Failed to create map download HTTP response file at \"%s\"",
                  tempPath);
         StartMapDownload(client, input, baseUrl, changeMap);
         return;
@@ -233,7 +233,7 @@ static void StartMapDownload(int client, const char[] input,
     pack.WriteCell(changeMap);
 
     ShowActivity2(client, "[SM] ", "Downloading map %s...", input);
-    LogMessage("Downloading map from %s", mapUrl);
+    LogMessage("Downloading map from \"%s\"", mapUrl);
     if (!QueueDownload(mapUrl, OnMapDownloaded, pack)) {
         ReplyToCommand(client, "[SM] Map download failed");
         CleanupTempFile(tempPath);
@@ -268,7 +268,7 @@ static void OnMapDownloaded(Handle request, bool failure,
         delete request;
 
         if (statusCode != k_EHTTPStatusCode404NotFound) {
-            LogError("Failed to download map from %s (HTTP %d)", mapUrl,
+            LogError("Failed to download map from \"%s\" (HTTP %d)", mapUrl,
                      statusCode);
             ReplyToCommand(client, "[SM] Map download failed");
             delete maps;
@@ -288,7 +288,7 @@ static void OnMapDownloaded(Handle request, bool failure,
             newPack.WriteCell(changeMap);
 
             mapUrls.GetString(mapIdx, mapUrl, sizeof(mapUrl));
-            LogMessage("Downloading map from %s", mapUrl);
+            LogMessage("Downloading map from \"%s\"", mapUrl);
             if (!QueueDownload(mapUrl, OnMapDownloaded, newPack)) {
                 ReplyToCommand(client, "[SM] Map download failed");
                 CleanupTempFile(tempPath);
@@ -314,7 +314,7 @@ static void OnMapDownloaded(Handle request, bool failure,
     delete pack;
 
     if (!SteamWorks_WriteHTTPResponseBodyToFile(request, tempPath)) {
-        LogError("Failed to initialize map download HTTP response file at %s",
+        LogError("Failed to create map download HTTP response file at \"%s\"",
                  tempPath);
         ReplyToCommand(client, "[SM] Map download failed");
         delete request;
@@ -326,8 +326,8 @@ static void OnMapDownloaded(Handle request, bool failure,
     BuildDestPath(map, destDir, sizeof(destDir), destPath,
                   sizeof(destPath));
     if (!DirExists(destDir)) {
-        if (!CreateDirectory(destDir, 0777)) {
-            LogError("Failed to create map directory %s", destDir);
+        if (!CreateDirectory(destDir, 0o755)) {
+            LogError("Failed to create map directory \"%s\"", destDir);
             ReplyToCommand(client, "[SM] Map download failed");
             delete request;
             return;
@@ -335,7 +335,8 @@ static void OnMapDownloaded(Handle request, bool failure,
     }
 
     if (!RenameFile(destPath, tempPath)) {
-        LogError("Failed to rename map to %s", destPath);
+        LogError("Failed to rename map from \"%s\" to \"%s\"", tempPath,
+                 destPath);
         ReplyToCommand(client, "[SM] Map download failed");
         CleanupTempFile(tempPath);
         delete request;
@@ -448,8 +449,13 @@ static void BuildDestPath(const char[] map, char[] destDir, int destDirSize,
                           char[] destPath, int destPathSize) {
     int lastSlashIdx = FindCharInString(map, '/', true);
     if (lastSlashIdx != -1) {
-        BuildPath(Path_SM, destDir, destDirSize, "../../maps/%s",
-                  map[lastSlashIdx + 1]);
+        char subdir[MAX_MAP_SUBDIR];
+        strcopy(
+            subdir,
+            ((lastSlashIdx + 1 < sizeof(subdir)) ? lastSlashIdx + 1 :
+             sizeof(subdir)),
+            map);
+        BuildPath(Path_SM, destDir, destDirSize, "../../maps/%s", subdir);
     } else {
         BuildPath(Path_SM, destDir, destDirSize, "../../maps");
     }
