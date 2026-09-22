@@ -111,11 +111,33 @@ static bool QueueDownload(
     const char[] url, SteamWorksHTTPRequestCompleted completedCallback,
     DataPack pack) {
     Handle request = SteamWorks_CreateHTTPRequest(k_EHTTPMethodGET, url);
-    SteamWorks_SetHTTPRequestNetworkActivityTimeout(request, HTTP_TIMEOUT);
-    SteamWorks_SetHTTPRequestAbsoluteTimeoutMS(request,
-                                               HTTP_TIMELIMIT * 1000);
-    SteamWorks_SetHTTPRequestContextValue(request, pack);
-    SteamWorks_SetHTTPCallbacks(request, completedCallback);
+    if (!request) {
+        LogError("Failed to create map download HTTP request");
+        return false;
+    }
+
+    if (!SteamWorks_SetHTTPRequestNetworkActivityTimeout(request,
+                                                         HTTP_TIMEOUT)) {
+        LogError("Failed to set map download HTTP inactivity timeout");
+        delete request;
+        return false;
+    }
+    if (!SteamWorks_SetHTTPRequestAbsoluteTimeoutMS(request,
+                                                    HTTP_TIMELIMIT * 1000)) {
+        LogError("Failed to set map download HTTP timeout");
+        delete request;
+        return false;
+    }
+    if (!SteamWorks_SetHTTPRequestContextValue(request, pack)) {
+        LogError("Failed to set map download HTTP context");
+        delete request;
+        return false;
+    }
+    if (!SteamWorks_SetHTTPCallbacks(request, completedCallback)) {
+        LogError("Failed to set map download HTTP callbacks");
+        delete request;
+        return false;
+    }
     if (!SteamWorks_SendHTTPRequest(request)) {
         LogError("Failed to initialize map download HTTP request");
         delete request;
@@ -133,6 +155,9 @@ static void FindMapDownload(int client, const char[] input,
     pack.WriteString(input);
     pack.WriteString(baseUrl);
     pack.WriteString(maplistUrl);
+    char tempPath[PLATFORM_MAX_PATH];
+    BuildTempPath("maplist", "txt", tempPath, sizeof(tempPath));
+    pack.WriteString(tempPath);
     pack.WriteCell(changeMap);
 
     LogMessage("Downloading map list from \"%s\"", maplistUrl);
@@ -155,6 +180,8 @@ static void OnMaplistDownloaded(Handle request, bool failure,
     pack.ReadString(baseUrl, sizeof(baseUrl));
     char maplistUrl[MAX_MAP_URL];
     pack.ReadString(maplistUrl, sizeof(maplistUrl));
+    char tempPath[PLATFORM_MAX_PATH];
+    pack.ReadString(tempPath, sizeof(tempPath));
     bool changeMap = pack.ReadCell();
     delete pack;
 
@@ -166,12 +193,10 @@ static void OnMaplistDownloaded(Handle request, bool failure,
         return;
     }
 
-    char tempPath[PLATFORM_MAX_PATH];
-    BuildTempPath("maplist", "txt", tempPath, sizeof(tempPath));
     bool success = SteamWorks_WriteHTTPResponseBodyToFile(request, tempPath);
     delete request;
     if (!success) {
-        LogError("Failed to create map download HTTP response file at \"%s\"",
+        LogError("Failed to create map download temp file at \"%s\"",
                  tempPath);
         StartMapDownload(client, input, baseUrl, changeMap);
         return;
@@ -179,6 +204,7 @@ static void OnMaplistDownloaded(Handle request, bool failure,
 
     File file = OpenFile(tempPath, "r");
     if (!file) {
+        LogError("Failed to open map download temp file at \"%s\"", tempPath);
         CleanupTempFile(tempPath);
         StartMapDownload(client, input, baseUrl, changeMap);
         return;
