@@ -372,11 +372,10 @@ static void OnMapDownloaded(Handle request, bool failure,
     LogAction(client, -1, "\"%L\" downloaded map \"%s\"",
               client, mapUrl);
 
-    int lastSlashIdx = FindCharInString(map, '/', true);
     if (changeMap) {
-        ChangeMap(client, map[lastSlashIdx + 1]);
+        ChangeMap(client, map);
     } else {
-        ShowActivity2(client, "[SM] ", "Downloaded map %s", map[lastSlashIdx + 1]);
+        ShowActivity2(client, "[SM] ", "Downloaded map %s", map);
     }
     delete request;
 }
