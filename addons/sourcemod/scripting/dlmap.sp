@@ -16,7 +16,7 @@ public Plugin myinfo = {
     name = "Map Downloader",
     author = "catmint",
     description = "Download a map and change to it",
-    version = "0.2",
+    version = "0.3",
     url = "https://github.com/misscatmint/sm-dlmap/"
 };
 
